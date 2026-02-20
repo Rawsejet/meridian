@@ -102,6 +102,8 @@ async def list_tasks(
     status: str | None = None,
     category: str | None = None,
     search: str | None = None,
+    due_after: str | None = None,
+    due_before: str | None = None,
     include_cancelled: bool = False,
     cursor: str | None = None,
     limit: int = 20,
@@ -109,6 +111,26 @@ async def list_tasks(
     db: AsyncSession = Depends(get_db),
 ):
     """List tasks with filters, pagination, and search."""
+
+    # Validate limit parameter
+    if limit <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "TASK_INVALID_LIMIT",
+                "message": "Limit must be positive",
+                "field": "limit",
+            },
+        )
+    if limit > 100:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "TASK_INVALID_LIMIT",
+                "message": "Limit cannot exceed 100",
+                "field": "limit",
+            },
+        )
 
     # Build query
     query = select(Task).where(Task.user_id == current_user_id)
@@ -124,6 +146,37 @@ async def list_tasks(
         query = query.where(Task.status == status)
     if category:
         query = query.where(Task.category == category)
+
+    # Apply date range filters
+    if due_after:
+        try:
+            due_after_dt = datetime.fromisoformat(due_after.replace("Z", "+00:00"))
+            query = query.where(Task.due_date >= due_after_dt)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "TASK_INVALID_DUE_DATE",
+                    "message": "Invalid due_after date format",
+                    "field": "due_after",
+                },
+            )
+
+    if due_before:
+        try:
+            due_before_dt = datetime.fromisoformat(due_before.replace("Z", "+00:00"))
+            query = query.where(Task.due_date <= due_before_dt)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "TASK_INVALID_DUE_DATE",
+                    "message": "Invalid due_before date format",
+                    "field": "due_before",
+                },
+            )
+
+    # Apply search
     if search:
         query = query.where(
             or_(
@@ -132,16 +185,41 @@ async def list_tasks(
             )
         )
 
-    # Cursor-based pagination
+    # Cursor-based pagination with proper stability
     if cursor:
         try:
             cursor_task = await db.get(Task, cursor)
-            if cursor_task:
-                query = query.where(Task.created_at < cursor_task.created_at)
+            if not cursor_task or str(cursor_task.user_id) != current_user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "code": "TASK_INVALID_CURSOR",
+                        "message": "Invalid cursor provided",
+                        "field": "cursor",
+                    },
+                )
+            # Use a more stable cursor approach by including created_at in the ordering
+            query = query.where(
+                or_(
+                    Task.created_at < cursor_task.created_at,
+                    and_(
+                        Task.created_at == cursor_task.created_at,
+                        Task.id < cursor_task.id
+                    )
+                )
+            )
         except Exception:
-            pass
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "TASK_INVALID_CURSOR",
+                    "message": "Invalid cursor provided",
+                    "field": "cursor",
+                },
+            )
 
-    query = query.order_by(Task.created_at.desc()).limit(limit + 1)
+    # Order by created_at DESC, then by id DESC for stability
+    query = query.order_by(Task.created_at.desc(), Task.id.desc()).limit(limit + 1)
     result = await db.execute(query)
     tasks = result.scalars().all()
 
@@ -150,6 +228,7 @@ async def list_tasks(
     if has_more:
         tasks = tasks[:limit]
 
+    # Generate next cursor from the last task in the current page
     next_cursor = str(tasks[-1].id) if tasks and has_more else None
 
     return TaskListResponse(

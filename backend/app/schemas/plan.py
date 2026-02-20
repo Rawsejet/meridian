@@ -1,8 +1,11 @@
 """Daily plan schemas."""
 from datetime import datetime, date
 from typing import Optional, List
+from uuid import UUID
 
 from pydantic import BaseModel, Field
+
+from app.schemas.task import TaskResponse
 
 
 class DailyPlanCreate(BaseModel):
@@ -28,6 +31,21 @@ class DailyPlanResponse(BaseModel):
     user_id: str
     plan_date: date
     task_order: list[str]  # list of task IDs
+    notes: Optional[str]
+    mood: Optional[int]
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class DailyPlanWithTasksResponse(BaseModel):
+    """Response schema for a daily plan with full task details."""
+
+    id: str
+    user_id: str
+    plan_date: date
+    tasks: List[TaskResponse]  # list of full task objects
     notes: Optional[str]
     mood: Optional[int]
     created_at: datetime

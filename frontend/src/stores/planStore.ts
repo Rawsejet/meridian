@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import axios from 'axios'
+import apiClient from '../lib/apiClient'
 import { useAuthStore } from './authStore'
 
 export interface Plan {
@@ -40,10 +40,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   fetchPlans: async () => {
     set({ isLoading: true, error: null })
     try {
-      const token = useAuthStore.getState().token
-      const response = await axios.get(`${API_URL}/api/v1/plans?days=30`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
+      const response = await apiClient.get(`${API_URL}/api/v1/plans?days=30`)
       set({ plans: response.data.plans, isLoading: false })
     } catch (error: any) {
       set({ isLoading: false, error: error.response?.data?.detail?.message || 'Failed to fetch plans' })
@@ -54,10 +51,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   fetchPlan: async (date: string) => {
     set({ isLoading: true, error: null })
     try {
-      const token = useAuthStore.getState().token
-      const response = await axios.get(`${API_URL}/api/v1/plans/${date}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
+      const response = await apiClient.get(`${API_URL}/api/v1/plans/${date}`)
       set({ plan: response.data, isLoading: false })
     } catch (error: any) {
       set({ isLoading: false, error: error.response?.data?.detail?.message || 'Failed to fetch plan' })
@@ -68,14 +62,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   createPlan: async (date: string, plan: Partial<Plan>) => {
     set({ isLoading: true, error: null })
     try {
-      const token = useAuthStore.getState().token
-      const response = await axios.post(
-        `${API_URL}/api/v1/plans/${date}`,
-        plan,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      )
+      const response = await apiClient.post(`${API_URL}/api/v1/plans/${date}`, plan)
       set((state) => ({
         plans: [response.data, ...state.plans],
         plan: response.data,
@@ -91,14 +78,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   updatePlan: async (date: string, plan: Partial<Plan>) => {
     set({ isLoading: true, error: null })
     try {
-      const token = useAuthStore.getState().token
-      const response = await axios.patch(
-        `${API_URL}/api/v1/plans/${date}`,
-        plan,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      )
+      const response = await apiClient.patch(`${API_URL}/api/v1/plans/${date}`, plan)
       set((state) => ({
         plans: state.plans.map((p) => (p.plan_date === date ? response.data : p)),
         plan: response.data,
@@ -114,14 +94,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   reorderTasks: async (date: string, taskOrder: string[]) => {
     set({ isLoading: true, error: null })
     try {
-      const token = useAuthStore.getState().token
-      const response = await axios.patch(
-        `${API_URL}/api/v1/plans/${date}/reorder`,
-        { task_order: taskOrder },
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      )
+      const response = await apiClient.patch(`${API_URL}/api/v1/plans/${date}/reorder`, { task_order: taskOrder })
       set((state) => ({
         plans: state.plans.map((p) => (p.plan_date === date ? response.data : p)),
         plan: response.data,
@@ -137,14 +110,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   completePlan: async (date: string, completions: Record<string, boolean>) => {
     set({ isLoading: true, error: null })
     try {
-      const token = useAuthStore.getState().token
-      const response = await axios.post(
-        `${API_URL}/api/v1/plans/${date}/complete`,
-        { task_completions: completions },
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      )
+      const response = await apiClient.post(`${API_URL}/api/v1/plans/${date}/complete`, { task_completions: completions })
       return response.data
     } catch (error: any) {
       set({ isLoading: false, error: error.response?.data?.detail?.message || 'Failed to complete plan' })
@@ -155,14 +121,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   addTaskToPlan: async (date: string, taskId: string) => {
     set({ isLoading: true, error: null })
     try {
-      const token = useAuthStore.getState().token
-      const response = await axios.post(
-        `${API_URL}/api/v1/plans/${date}/tasks`,
-        { task_id: taskId },
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      )
+      const response = await apiClient.post(`${API_URL}/api/v1/plans/${date}/tasks`, { task_id: taskId })
       set((state) => ({
         plans: state.plans.map((p) => (p.plan_date === date ? response.data : p)),
         plan: response.data,
@@ -178,13 +137,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   removeTaskFromPlan: async (date: string, taskId: string) => {
     set({ isLoading: true, error: null })
     try {
-      const token = useAuthStore.getState().token
-      await axios.delete(
-        `${API_URL}/api/v1/plans/${date}/tasks/${taskId}`,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      )
+      await apiClient.delete(`${API_URL}/api/v1/plans/${date}/tasks/${taskId}`)
       // Update the plan's task_order by removing the task
       set((state) => {
         if (!state.plan || state.plan.plan_date !== date) return state

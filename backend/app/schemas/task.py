@@ -1,8 +1,9 @@
 """Task schemas."""
 from datetime import datetime, date
 from typing import Optional
+from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 
 class TaskCreate(BaseModel):
@@ -33,8 +34,8 @@ class TaskUpdate(BaseModel):
 class TaskResponse(BaseModel):
     """Response schema for a task."""
 
-    id: str
-    user_id: str
+    id: UUID
+    user_id: UUID
     title: str
     description: Optional[str]
     due_date: Optional[datetime]
@@ -48,6 +49,10 @@ class TaskResponse(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @field_serializer("id", "user_id")
+    def serialize_uuid(self, v: UUID) -> str:
+        return str(v)
 
 
 class TaskListResponse(BaseModel):

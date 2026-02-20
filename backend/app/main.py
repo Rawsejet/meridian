@@ -41,6 +41,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Exception handlers
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+        # Check if detail is a dict with a code
+        if isinstance(exc.detail, dict):
+            detail = exc.detail
+            code = detail.get("code", "HTTP_ERROR")
+            message = detail.get("message", str(exc.detail))
+            field = detail.get("field")
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={
+                    "detail": {
+                        "code": code,
+                        "message": message,
+                        "field": field,
+                    }
+                },
+            )
         return JSONResponse(
             status_code=exc.status_code,
             content={

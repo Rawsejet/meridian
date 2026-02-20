@@ -28,6 +28,9 @@ class RegisterResponse(BaseModel):
     email: str
     display_name: str
     created_at: datetime
+    access_token: str
+    refresh_token: str
+    user: "UserResponse"
 
 
 class LoginRequest(BaseModel):
@@ -50,6 +53,7 @@ class TokenRefreshResponse(BaseModel):
     """Response schema for token refresh."""
 
     access_token: str
+    refresh_token: str | None = None
     token_type: str = "Bearer"
 
 

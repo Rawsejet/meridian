@@ -20,7 +20,7 @@ Meridian helps you plan your day effectively with:
 - **Frontend**: React 18, TypeScript, TanStack Query, Tailwind CSS, dnd-kit
 - **Auth**: JWT access/refresh tokens, bcrypt, Google OAuth 2.0
 - **Notifications**: Web Push (VAPID), email (SMTP via Celery)
-- **LLM**: Qwen3-Coder via llama.cpp at localhost:8085
+- **LLM**: Some local model via llama.cpp at localhost:8085
 
 ## Requirements
 
@@ -28,7 +28,7 @@ Meridian helps you plan your day effectively with:
 - Node.js 20+
 - PostgreSQL 16
 - Redis 7
-- llama.cpp running on localhost:8085 with Qwen3-Coder model
+- llama.cpp running on localhost:8085 with some local model
 
 ## Quick Start
 

@@ -24,7 +24,7 @@ metadata = MetaData(
 )
 
 # Declarative base for ORM models
-Base = declarative_base()
+Base = declarative_base(metadata=metadata)
 
 _engine = None
 _session_factory = None
@@ -60,19 +60,56 @@ def get_session_factory(settings: Settings | None = None):
     return _session_factory
 
 
-@asynccontextmanager
-async def get_session(
+class DatabaseSession:
+    """Async database session dependency for FastAPI."""
+
+    def __init__(self, settings: Settings | None = None):
+        self._settings = settings
+        self._session: AsyncSession | None = None
+
+    async def __call__(self) -> AsyncSession:
+        """Get or create database session."""
+        if self._session is None:
+            factory = get_session_factory(self._settings)
+            self._session = factory()
+        return self._session
+
+    async def commit_rollback(self):
+        """Commit if session exists, rollback on error."""
+        if self._session is not None:
+            try:
+                await self._session.commit()
+            except Exception:
+                await self._session.rollback()
+                raise
+
+    async def close(self):
+        """Close the session."""
+        if self._session is not None:
+            await self._session.close()
+            self._session = None
+
+
+# Global instance for test override
+_db_session_dependency: DatabaseSession | None = None
+
+
+def get_session(
     settings: Settings | None = None,
-) -> AsyncGenerator[AsyncSession, None]:
-    """Get database session (context manager)."""
-    factory = get_session_factory(settings)
-    async with factory() as session:
-        try:
-            yield session
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            raise
+) -> DatabaseSession:
+    """Get database session dependency."""
+    global _db_session_dependency
+    if _db_session_dependency is None:
+        _db_session_dependency = DatabaseSession(settings)
+    return _db_session_dependency
+
+
+def reset_db_session_dependency():
+    """Reset the database session dependency (for tests)."""
+    global _db_session_dependency
+    if _db_session_dependency is not None:
+        asyncio.run(_db_session_dependency.close())
+        _db_session_dependency = None
 
 
 async def get_async_connection(

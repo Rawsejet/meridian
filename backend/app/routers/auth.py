@@ -5,12 +5,13 @@ import hashlib
 import urllib.parse
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
 from fastapi.responses import RedirectResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Optional, AsyncGenerator
 
-from app.core.database import get_session
+from app.core.database import get_session_factory
 from app.core.security import (
     verify_password,
     get_password_hash,
@@ -19,6 +20,7 @@ from app.core.security import (
     decode_token,
 )
 from app.models.user import User
+from app.models.notification import NotificationPreference
 from app.schemas.auth import (
     RegisterRequest,
     RegisterResponse,
@@ -33,44 +35,64 @@ from app.schemas.user import UserCreate, UserUpdate
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-# Google OAuth configuration
-GOOGLE_CLIENT_ID = "YOUR_GOOGLE_CLIENT_ID"
-GOOGLE_CLIENT_SECRET = "YOUR_GOOGLE_CLIENT_SECRET"
-GOOGLE_REDIRECT_URI = "http://localhost:8000/api/v1/auth/google/callback"
-GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    """Get database session."""
+    factory = get_session_factory()
+    session = factory()
+    try:
+        yield session
+    finally:
+        await session.close()
 
 
-def generate_pkce_pair():
-    """Generate PKCE code verifier and challenge for OAuth."""
-    code_verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8').rstrip('=')
-    code_challenge = base64.urlsafe_b64encode(
-        hashlib.sha256(code_verifier.encode('utf-8')).digest()
-    ).decode('utf-8').rstrip('=')
+def create_oauth_state() -> str:
+    """Generate a random state parameter for OAuth."""
+    return secrets.token_urlsafe(32)
+
+
+def generate_pkce_pair() -> tuple[str, str]:
+    """Generate a PKCE code verifier and code challenge pair."""
+    code_verifier = secrets.token_urlsafe(64)
+    digest = hashlib.sha256(code_verifier.encode("ascii")).digest()
+    code_challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
     return code_verifier, code_challenge
 
 
-def create_oauth_state():
-    """Create a secure random state for OAuth."""
-    return base64.urlsafe_b64encode(secrets.token_bytes(16)).decode('utf-8').rstrip('=')
+async def create_default_notification_preference(db: AsyncSession, user_id: str):
+    """Create default notification preferences for a new user."""
+    notification_pref = NotificationPreference(
+        user_id=user_id,
+        morning_briefing_enabled=True,
+        morning_briefing_time=datetime.now(timezone.utc).replace(hour=8, minute=0, second=0, microsecond=0).time(),
+        midday_nudge_enabled=True,
+        midday_nudge_time=datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0).time(),
+        evening_reflection_enabled=True,
+        evening_reflection_time=datetime.now(timezone.utc).replace(hour=20, minute=0, second=0, microsecond=0).time(),
+        email_notifications=True,
+        push_notifications=True,
+    )
+    db.add(notification_pref)
+    await db.commit()
 
 
 @router.post("/register", response_model=RegisterResponse)
 async def register(
     request: RegisterRequest,
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_db),
 ):
     """Register a new user with email and password."""
     # Check if user exists
     result = await db.execute(
-        User.__table__.select().where(User.email == request.email)
+        select(User).where(User.email == request.email)
     )
     existing_user = result.scalar_one_or_none()
 
     if existing_user:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_409_CONFLICT,
             detail={
-                "code": "AUTH_EMAIL_ALREADY_EXISTS",
+                "code": "AUTH_EMAIL_EXISTS",
                 "message": "Email already registered",
                 "field": "email",
             },
@@ -91,31 +113,48 @@ async def register(
     except IntegrityError:
         await db.rollback()
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_409_CONFLICT,
             detail={
-                "code": "AUTH_EMAIL_ALREADY_EXISTS",
+                "code": "AUTH_EMAIL_EXISTS",
                 "message": "Email already registered",
                 "field": "email",
             },
         )
+
+    # Create default notification preferences
+    await create_default_notification_preference(db, str(user.id))
+
+    # Create tokens
+    access_token = create_access_token(str(user.id))
+    refresh_token = create_refresh_token(str(user.id))
 
     return RegisterResponse(
         id=str(user.id),
         email=user.email,
         display_name=user.display_name,
         created_at=user.created_at,
+        access_token=access_token,
+        refresh_token=refresh_token,
+        user=UserResponse(
+            id=str(user.id),
+            email=user.email,
+            display_name=user.display_name,
+            avatar_url=user.avatar_url,
+            timezone=user.timezone,
+            created_at=user.created_at,
+        ),
     )
 
 
 @router.post("/login", response_model=LoginResponse)
 async def login(
     request: LoginRequest,
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_db),
 ):
     """Login user with email and password."""
     # Find user by email
     result = await db.execute(
-        User.__table__.select().where(User.email == request.email)
+        select(User).where(User.email == request.email)
     )
     user = result.scalar_one_or_none()
 
@@ -160,7 +199,7 @@ async def login(
 @router.post("/refresh", response_model=TokenRefreshResponse)
 async def refresh_token(
     request: Request,
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_db),
 ):
     """Refresh access token using refresh token."""
     # Get refresh token from cookie or body
@@ -205,7 +244,7 @@ async def refresh_token(
         )
 
     # Check if user exists
-    result = await db.execute(User.__table__.select().where(User.id == user_id))
+    result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
 
     if not user:
@@ -221,7 +260,10 @@ async def refresh_token(
     # Create new access token
     new_access_token = create_access_token(str(user.id))
 
-    return TokenRefreshResponse(access_token=new_access_token)
+    # Create new refresh token (rotation)
+    new_refresh_token = create_refresh_token(str(user.id))
+
+    return TokenRefreshResponse(access_token=new_access_token, refresh_token=new_refresh_token)
 
 
 @router.get("/google/url", response_model=GoogleAuthUrlResponse)
@@ -249,8 +291,8 @@ async def get_google_auth_url(response: Response):
     )
 
     params = {
-        "client_id": GOOGLE_CLIENT_ID,
-        "redirect_uri": GOOGLE_REDIRECT_URI,
+        "client_id": "YOUR_GOOGLE_CLIENT_ID",
+        "redirect_uri": "http://localhost:8000/api/v1/auth/google/callback",
         "response_type": "code",
         "scope": "openid profile email",
         "code_challenge": code_challenge,
@@ -258,7 +300,7 @@ async def get_google_auth_url(response: Response):
         "state": state,
     }
 
-    auth_url = f"{GOOGLE_AUTH_URL}?{urllib.parse.urlencode(params)}"
+    auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urllib.parse.urlencode(params)}"
     return GoogleAuthUrlResponse(auth_url=auth_url, state=state)
 
 
@@ -287,8 +329,8 @@ async def google_login(response: Response):
     )
 
     params = {
-        "client_id": GOOGLE_CLIENT_ID,
-        "redirect_uri": GOOGLE_REDIRECT_URI,
+        "client_id": "YOUR_GOOGLE_CLIENT_ID",
+        "redirect_uri": "http://localhost:8000/api/v1/auth/google/callback",
         "response_type": "code",
         "scope": "openid profile email",
         "code_challenge": code_challenge,
@@ -296,14 +338,14 @@ async def google_login(response: Response):
         "state": state,
     }
 
-    auth_url = f"{GOOGLE_AUTH_URL}?{urllib.parse.urlencode(params)}"
+    auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urllib.parse.urlencode(params)}"
     return RedirectResponse(url=auth_url)
 
 
 @router.get("/google/callback", response_model=GoogleOAuthCallbackResponse)
 async def google_callback(
     request: Request,
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_db),
     code: Optional[str] = None,
     state: Optional[str] = None,
     error: Optional[str] = None,
@@ -349,36 +391,73 @@ async def google_callback(
     except HTTPException:
         raise
 
-    # Find or create user
+    # Find or create user by google_id first, then by email
+    google_id = user_info.get("id")
     result = await db.execute(
-        User.__table__.select().where(User.email == user_info["email"])
+        select(User).where(User.google_id == google_id)
     )
     user = result.scalar_one_or_none()
 
     if not user:
-        # Create new user from Google info
-        user = User(
-            email=user_info["email"],
-            display_name=user_info.get("name", user_info["email"].split("@")[0]),
-            password_hash=None,  # No password for OAuth users
-            avatar_url=user_info.get("picture"),
-            timezone=user_info.get("locale", "UTC"),
+        # Check if a user with this email exists (email/password user)
+        result = await db.execute(
+            select(User).where(User.email == user_info["email"])
         )
-        db.add(user)
-        try:
-            await db.commit()
-            await db.refresh(user)
-        except IntegrityError:
-            await db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"code": "DB_ERROR", "message": "Failed to create user"},
+        existing_email_user = result.scalar_one_or_none()
+
+        if existing_email_user:
+            # Email collision: existing user has email/password, new user has Google
+            if existing_email_user.password_hash:
+                # Existing user has password - don't merge
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "AUTH_EMAIL_COLLISION",
+                        "message": "Email already registered with password. Please link accounts.",
+                        "field": "email",
+                    },
+                )
+            else:
+                # Existing user is already a Google OAuth user - update them
+                user = existing_email_user
+        else:
+            # Create new user from Google info
+            user = User(
+                email=user_info["email"],
+                display_name=user_info.get("name", user_info["email"].split("@")[0]),
+                password_hash=None,  # No password for OAuth users
+                google_id=google_id,
+                avatar_url=user_info.get("picture"),
+                timezone=user_info.get("locale", "UTC"),
             )
-    else:
-        # Update avatar URL if changed
+            db.add(user)
+            try:
+                await db.commit()
+                await db.refresh(user)
+            except IntegrityError:
+                await db.rollback()
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail={"code": "DB_ERROR", "message": "Failed to create user"},
+                )
+
+    # Update user info if needed
+    if user:
+        if user_info.get("email") and user_info.get("email") != user.email:
+            user.email = user_info.get("email")
+        if user_info.get("name") and user_info.get("name") != user.display_name:
+            user.display_name = user_info.get("name")
         if user_info.get("picture") and user_info.get("picture") != user.avatar_url:
             user.avatar_url = user_info.get("picture")
-            await db.commit()
+        if user_info.get("locale") and user_info.get("locale") != user.timezone:
+            user.timezone = user_info.get("locale")
+
+        # Set google_id if not already set
+        if google_id and not user.google_id:
+            user.google_id = google_id
+
+        await db.commit()
+        await db.refresh(user)
 
     # Create tokens
     access_token = create_access_token(str(user.id))
@@ -404,10 +483,10 @@ async def exchange_code_for_token(code: str) -> dict:
 
     token_url = "https://oauth2.googleapis.com/token"
     data = {
-        "client_id": GOOGLE_CLIENT_ID,
-        "client_secret": GOOGLE_CLIENT_SECRET,
+        "client_id": "YOUR_GOOGLE_CLIENT_ID",
+        "client_secret": "YOUR_GOOGLE_CLIENT_SECRET",
         "code": code,
-        "redirect_uri": GOOGLE_REDIRECT_URI,
+        "redirect_uri": "http://localhost:8000/api/v1/auth/google/callback",
         "grant_type": "authorization_code",
     }
 
@@ -445,7 +524,7 @@ async def get_google_user_info(access_token: str) -> dict:
 @router.get("/users/me", response_model=UserResponse)
 async def get_current_user(
     request: Request,
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_db),
 ):
     """Get current user profile."""
     # Extract user from JWT token
@@ -476,7 +555,7 @@ async def get_current_user(
         )
 
     # Get user
-    result = await db.execute(User.__table__.select().where(User.id == user_id))
+    result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
 
     if not user:

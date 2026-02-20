@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import axios from 'axios'
+import apiClient from '../lib/apiClient'
 
 interface User {
   id: string
@@ -36,7 +36,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   login: async (email: string, password: string) => {
     set({ isLoading: true, error: null })
     try {
-      const response = await axios.post(`${API_URL}/api/v1/auth/login`, {
+      const response = await apiClient.post(`${API_URL}/api/v1/auth/login`, {
         email,
         password,
       })
@@ -54,7 +54,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   register: async (email: string, password: string, displayName: string) => {
     set({ isLoading: true, error: null })
     try {
-      const response = await axios.post(`${API_URL}/api/v1/auth/register`, {
+      const response = await apiClient.post(`${API_URL}/api/v1/auth/register`, {
         email,
         password,
         display_name: displayName,
@@ -81,12 +81,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (!refreshToken) return
 
     try {
-      const response = await axios.post(`${API_URL}/api/v1/auth/refresh`, {
+      const response = await apiClient.post(`${API_URL}/api/v1/auth/refresh`, {
         refresh_token: refreshToken,
       })
-      const { access_token } = response.data
+      const { access_token, refresh_token } = response.data
       localStorage.setItem('token', access_token)
-      set({ token: access_token })
+      localStorage.setItem('refresh_token', refresh_token)
+      set({ token: access_token, refreshToken: refresh_token })
     } catch (error) {
       get().logout()
       throw error
@@ -96,7 +97,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   googleLogin: async () => {
     set({ isLoading: true, error: null })
     try {
-      const response = await axios.get(`${API_URL}/api/v1/auth/google/url`)
+      const response = await apiClient.get(`${API_URL}/api/v1/auth/google/url`)
       // Redirect user to Google OAuth URL
       window.location.href = response.data.auth_url
     } catch (error: any) {

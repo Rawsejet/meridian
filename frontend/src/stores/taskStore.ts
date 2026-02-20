@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import axios from 'axios'
+import apiClient from '../lib/apiClient'
 import { useAuthStore } from './authStore'
 
 export interface Task {
@@ -40,10 +40,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   fetchTasks: async () => {
     set({ isLoading: true, error: null })
     try {
-      const token = useAuthStore.getState().token
-      const response = await axios.get(`${API_URL}/api/v1/tasks`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
+      const response = await apiClient.get(`${API_URL}/api/v1/tasks`)
       set({ tasks: response.data.tasks, isLoading: false })
     } catch (error: any) {
       set({ isLoading: false, error: error.response?.data?.detail?.message || 'Failed to fetch tasks' })
@@ -54,14 +51,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   createTask: async (task: Partial<Task>) => {
     set({ isLoading: true, error: null })
     try {
-      const token = useAuthStore.getState().token
-      const response = await axios.post(
-        `${API_URL}/api/v1/tasks`,
-        task,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      )
+      const response = await apiClient.post(`${API_URL}/api/v1/tasks`, task)
       set((state) => ({ tasks: [response.data, ...state.tasks], isLoading: false }))
       return response.data
     } catch (error: any) {
@@ -73,14 +63,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   updateTask: async (id: string, task: Partial<Task>) => {
     set({ isLoading: true, error: null })
     try {
-      const token = useAuthStore.getState().token
-      const response = await axios.patch(
-        `${API_URL}/api/v1/tasks/${id}`,
-        task,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      )
+      const response = await apiClient.patch(`${API_URL}/api/v1/tasks/${id}`, task)
       set((state) => ({
         tasks: state.tasks.map((t) => (t.id === id ? response.data : t)),
         isLoading: false,
@@ -95,10 +78,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   deleteTask: async (id: string) => {
     set({ isLoading: true, error: null })
     try {
-      const token = useAuthStore.getState().token
-      await axios.delete(`${API_URL}/api/v1/tasks/${id}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
+      await apiClient.delete(`${API_URL}/api/v1/tasks/${id}`)
       set((state) => ({
         tasks: state.tasks.filter((t) => t.id !== id),
         isLoading: false,
@@ -112,14 +92,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   completeTask: async (id: string) => {
     set({ isLoading: true, error: null })
     try {
-      const token = useAuthStore.getState().token
-      const response = await axios.post(
-        `${API_URL}/api/v1/tasks/${id}/complete`,
-        {},
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      )
+      const response = await apiClient.post(`${API_URL}/api/v1/tasks/${id}/complete`, {})
       set((state) => ({
         tasks: state.tasks.map((t) => (t.id === id ? response.data : t)),
         isLoading: false,

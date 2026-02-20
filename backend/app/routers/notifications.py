@@ -14,6 +14,7 @@ from app.schemas.notification import (
     PushSubscriptionResponse,
 )
 from app.core.security import decode_token
+from sqlalchemy import and_
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
@@ -59,13 +60,9 @@ async def get_current_user_id(request: Request) -> str:
 @router.get("/preferences", response_model=NotificationPreferenceResponse)
 async def get_notification_preferences(
     current_user_id: str = Depends(get_current_user_id),
-    db=None,  # type: AsyncSession
+    db: AsyncSession = Depends(get_session),
 ):
     """Get notification preferences for current user."""
-    from app.core.database import get_session
-
-    if db is None:
-        db = await get_session().__anext__()
 
     result = await db.execute(
         select(NotificationPreference).where(
@@ -98,13 +95,9 @@ async def get_notification_preferences(
 async def update_notification_preferences(
     request: NotificationPreferenceCreate,
     current_user_id: str = Depends(get_current_user_id),
-    db=None,  # type: AsyncSession
+    db: AsyncSession = Depends(get_session),
 ):
     """Update notification preferences for current user."""
-    from app.core.database import get_session
-
-    if db is None:
-        db = await get_session().__anext__()
 
     result = await db.execute(
         select(NotificationPreference).where(
@@ -135,13 +128,9 @@ async def update_notification_preferences(
 async def create_push_subscription(
     request: PushSubscriptionCreate,
     current_user_id: str = Depends(get_current_user_id),
-    db=None,  # type: AsyncSession
+    db: AsyncSession = Depends(get_session),
 ):
     """Create or update a push subscription."""
-    from app.core.database import get_session
-
-    if db is None:
-        db = await get_session().__anext__()
 
     # Check if subscription exists
     result = await db.execute(
@@ -178,13 +167,9 @@ async def create_push_subscription(
 async def delete_push_subscription(
     subscription_id: str,
     current_user_id: str = Depends(get_current_user_id),
-    db=None,  # type: AsyncSession
+    db: AsyncSession = Depends(get_session),
 ):
     """Delete a push subscription."""
-    from app.core.database import get_session
-
-    if db is None:
-        db = await get_session().__anext__()
 
     subscription = await db.get(PushSubscription, subscription_id)
 
@@ -207,13 +192,9 @@ async def delete_push_subscription(
 @router.get("/push-subscriptions", response_model=list[PushSubscriptionResponse])
 async def list_push_subscriptions(
     current_user_id: str = Depends(get_current_user_id),
-    db=None,  # type: AsyncSession
+    db: AsyncSession = Depends(get_session),
 ):
     """List all push subscriptions for current user."""
-    from app.core.database import get_session
-
-    if db is None:
-        db = await get_session().__anext__()
 
     result = await db.execute(
         select(PushSubscription).where(

@@ -1,10 +1,12 @@
 """Task router."""
+from typing import AsyncGenerator
+
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_
-from datetime import datetime
+from datetime import datetime, timezone
 
-from app.core.database import get_session
+from app.core.database import get_session_factory
 from app.models.user import User
 from app.models.task import Task, Priority, TaskStatus
 from app.schemas.task import (
@@ -18,6 +20,16 @@ from app.schemas.auth import UserResponse
 from app.core.security import decode_token
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+
+
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    """Get database session."""
+    factory = get_session_factory()
+    session = factory()
+    try:
+        yield session
+    finally:
+        await session.close()
 
 
 async def get_current_user_id(request: Request) -> str:
@@ -62,7 +74,7 @@ async def get_current_user_id(request: Request) -> str:
 async def create_task(
     request: TaskCreate,
     current_user_id: str = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_db),
 ):
     """Create a new task."""
     task = Task(
@@ -90,15 +102,20 @@ async def list_tasks(
     status: str | None = None,
     category: str | None = None,
     search: str | None = None,
+    include_cancelled: bool = False,
     cursor: str | None = None,
     limit: int = 20,
     current_user_id: str = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_db),
 ):
     """List tasks with filters, pagination, and search."""
 
     # Build query
     query = select(Task).where(Task.user_id == current_user_id)
+
+    # Exclude cancelled tasks by default
+    if not include_cancelled and status is None:
+        query = query.where(Task.status != TaskStatus.CANCELLED.value)
 
     # Apply filters
     if priority:
@@ -146,23 +163,12 @@ async def list_tasks(
 async def get_task(
     task_id: str,
     current_user_id: str = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_db),
 ):
     """Get a specific task by ID."""
     task = await db.get(Task, task_id)
 
-    if not task:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "TASK_NOT_FOUND",
-                "message": f"Task with ID {task_id} not found",
-                "field": "task_id",
-            },
-        )
-
-    # Authorization check (404 not 403 for other users)
-    if task.user_id != current_user_id:
+    if not task or str(task.user_id) != current_user_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
@@ -180,17 +186,17 @@ async def update_task(
     task_id: str,
     request: TaskUpdate,
     current_user_id: str = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_db),
 ):
     """Update a task."""
     task = await db.get(Task, task_id)
 
-    if not task or task.user_id != current_user_id:
+    if not task or str(task.user_id) != current_user_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
                 "code": "TASK_NOT_FOUND",
-                "message": f"Task with ID {task_id} not found",
+                "message": "Task not found",
                 "field": "task_id",
             },
         )
@@ -206,21 +212,21 @@ async def update_task(
     return TaskResponse.model_validate(task)
 
 
-@router.delete("/{task_id}")
+@router.delete("/{task_id}", response_model=TaskResponse)
 async def delete_task(
     task_id: str,
     current_user_id: str = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Soft-delete a task."""
+    """Soft-delete a task (sets status to cancelled)."""
     task = await db.get(Task, task_id)
 
-    if not task or task.user_id != current_user_id:
+    if not task or str(task.user_id) != current_user_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
                 "code": "TASK_NOT_FOUND",
-                "message": f"Task with ID {task_id} not found",
+                "message": "Task not found",
                 "field": "task_id",
             },
         )
@@ -228,8 +234,9 @@ async def delete_task(
     # Soft delete
     task.status = TaskStatus.CANCELLED.value
     await db.commit()
+    await db.refresh(task)
 
-    return {"message": "Task deleted successfully"}
+    return TaskResponse.model_validate(task)
 
 
 @router.post("/{task_id}/complete", response_model=TaskResponse)
@@ -237,23 +244,23 @@ async def complete_task(
     task_id: str,
     request: CompleteTaskRequest,
     current_user_id: str = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_db),
 ):
     """Mark a task as completed."""
     task = await db.get(Task, task_id)
 
-    if not task or task.user_id != current_user_id:
+    if not task or str(task.user_id) != current_user_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
                 "code": "TASK_NOT_FOUND",
-                "message": f"Task with ID {task_id} not found",
+                "message": "Task not found",
                 "field": "task_id",
             },
         )
 
     task.status = TaskStatus.COMPLETED.value
-    task.completed_at = request.completed_at or datetime.utcnow()
+    task.completed_at = request.completed_at or datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(task)
 

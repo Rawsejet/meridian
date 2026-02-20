@@ -32,7 +32,7 @@ class NotificationPreference(Base):
 
     # Relationships
     user = relationship("User", back_populates="notification_preferences")
-    push_subscriptions = relationship("PushSubscription", back_populates="user")
+    push_subscriptions = relationship("PushSubscription", back_populates="notification_preference")
 
     def __repr__(self) -> str:
         return f"<NotificationPreference(id={self.id}, user_id={self.user_id})>"
@@ -44,6 +44,7 @@ class PushSubscription(Base):
     __tablename__ = "push_subscriptions"
 
     id = Column(UUID, primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
+    notification_preference_id = Column(UUID, ForeignKey("notification_preferences.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(UUID, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     endpoint = Column(Text, nullable=False)
     p256dh_key = Column(Text, nullable=False)
@@ -53,6 +54,7 @@ class PushSubscription(Base):
 
     # Relationships
     user = relationship("User", back_populates="push_subscriptions")
+    notification_preference = relationship("NotificationPreference", back_populates="push_subscriptions")
 
     def __repr__(self) -> str:
         return f"<PushSubscription(id={self.id}, user_id={self.user_id}, endpoint='{self.endpoint[:50]}...')>"

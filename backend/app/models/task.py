@@ -1,6 +1,6 @@
 """Task model."""
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import TYPE_CHECKING
 
@@ -42,17 +42,27 @@ class Task(Base):
     user_id = Column(UUID, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     title = Column(String(500), nullable=False)
     description = Column(Text)
-    due_date = Column(DateTime)
+    due_date = Column(DateTime(timezone=True))
     priority = Column(SmallInteger, nullable=False, default=Priority.MEDIUM.value)
     estimated_minutes = Column(Integer)
     energy_level = Column(SmallInteger)  # 1=low, 2=medium, 3=high
     category = Column(String(100))
     status = Column(String(20), nullable=False, default=TaskStatus.PENDING.value)
     recurring_rule = Column(JSONB)  # iCal RRULE or null
-    completed_at = Column(DateTime)
+    completed_at = Column(DateTime(timezone=True))
 
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, server_default=text("now()"))
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, server_default=text("now()"))
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
 
     # Indexes
     __table_args__ = (

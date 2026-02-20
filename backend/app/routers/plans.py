@@ -310,6 +310,86 @@ async def reorder_tasks(
             },
         )
 
+    # Validate that task_order is not empty
+    if len(request.task_order) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "PLAN_EMPTY_TASK_ORDER",
+                "message": "At least one task must be included in the plan",
+                "field": "task_order",
+            },
+        )
+
+    # Validate that no duplicate tasks are provided
+    if len(request.task_order) != len(set(request.task_order)):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "PLAN_DUPLICATE_TASK",
+                "message": "Duplicate task IDs are not allowed in task_order",
+                "field": "task_order",
+            },
+        )
+
+    # Validate that all tasks in the new order exist and belong to current user
+    result = await db.execute(
+        select(Task.id, Task.user_id, Task.status)
+        .where(
+            and_(
+                Task.id.in_(request.task_order),
+                Task.user_id == current_user_id,
+            )
+        )
+    )
+    tasks = result.all()
+
+    # Check that all requested task IDs exist
+    if len(tasks) != len(request.task_order):
+        # Find missing task IDs
+        provided_task_ids = set(request.task_order)
+        found_task_ids = {task.id for task in tasks}
+        missing_task_ids = provided_task_ids - found_task_ids
+
+        if missing_task_ids:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "PLAN_INVALID_TASK",
+                    "message": f"Task IDs {list(missing_task_ids)} do not belong to current user or don't exist",
+                    "field": "task_order",
+                },
+            )
+
+    # Check that all tasks are not cancelled
+    cancelled_tasks = [task for task in tasks if task.status == "cancelled"]
+    if cancelled_tasks:
+        cancelled_task_ids = [str(task.id) for task in cancelled_tasks]
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "PLAN_CANCELLED_TASK",
+                "message": f"Cancelled tasks cannot be included in plan: {cancelled_task_ids}",
+                "field": "task_order",
+            },
+        )
+
+    # Validate that the new task order contains exactly the same set of tasks as the original plan
+    # This ensures no tasks are added or removed, only reordered
+    original_task_set = set(plan.task_order)
+    new_task_set = set(request.task_order)
+
+    if original_task_set != new_task_set:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "PLAN_TASK_SET_MISMATCH",
+                "message": "Task order must contain exactly the same tasks as the existing plan",
+                "field": "task_order",
+            },
+        )
+
+    # All validations passed, update the task order
     plan.task_order = request.task_order
     await db.commit()
     await db.refresh(plan)
